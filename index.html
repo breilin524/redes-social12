@@ -692,30 +692,29 @@ let comments = {};
 let blockedUsers = [];
 let newPostRating = 0;
 
-// ===== FUNCIONES JSONBIN MEJORADAS =====
+// ===== FUNCIONES JSONBIN =====
 async function loadFromCloud() {
     try {
-        // Agregamos un parámetro aleatorio para evitar caché
-        const response = await fetch(`${API_URL}/latest?${Date.now()}`, {
-            headers: { 
-                'X-Master-Key': JSONBIN_CONFIG.API_KEY,
-                'X-Bin-Meta': 'false' // Evita metadata
-            }
+        const response = await fetch(`${API_URL}/latest?meta=false&${Date.now()}`, {
+            headers: { 'X-Master-Key': JSONBIN_CONFIG.API_KEY }
         });
         
-        if (!response.ok) throw new Error('Error cargando');
+        if (!response.ok) {
+            console.log("Error HTTP:", response.status);
+            return false;
+        }
         
         const data = await response.json();
         
-        // Asegurarnos que los datos son un objeto
-        if (data && typeof data === 'object') {
-            users = data.users || [];
-            posts = data.posts || [];
-            comments = data.comments || {};
-            blockedUsers = data.blockedUsers || [];
-        }
+        // Los datos pueden venir en data.record o directamente en data
+        const record = data.record || data;
         
-        console.log('✅ Datos cargados:', { users: users.length, posts: posts.length });
+        users = record.users || [];
+        posts = record.posts || [];
+        comments = record.comments || {};
+        blockedUsers = record.blockedUsers || [];
+        
+        console.log(`✅ Cargados: ${users.length} usuarios, ${posts.length} posts`);
         return true;
     } catch (error) {
         console.error('Error cargando:', error);
@@ -725,40 +724,22 @@ async function loadFromCloud() {
 
 async function saveToCloud() {
     try {
-        const dataToSave = {
-            users: users || [],
-            posts: posts || [],
-            comments: comments || {},
-            blockedUsers: blockedUsers || [],
-            lastUpdate: new Date().toISOString()
-        };
+        const dataToSave = { users, posts, comments, blockedUsers };
         
         const response = await fetch(API_URL, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Master-Key': JSONBIN_CONFIG.API_KEY,
-                'X-Bin-Meta': 'false'
+                'X-Master-Key': JSONBIN_CONFIG.API_KEY
             },
             body: JSON.stringify(dataToSave)
         });
         
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Error ${response.status}: ${errorText}`);
-        }
-        
-        console.log('✅ Datos guardados exitosamente');
-        
-        // Forzar recarga inmediata
-        setTimeout(async () => {
-            await loadFromCloud();
-        }, 500);
-        
+        if (!response.ok) throw new Error('Error');
+        console.log('✅ Datos guardados');
         return true;
     } catch (error) {
         console.error('Error guardando:', error);
-        showNotification("Error al guardar: " + error.message, "error");
         return false;
     }
 }
@@ -793,7 +774,6 @@ function showFeed() {
     document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById("navFeed").classList.add("active");
     
-    // Recargar posts al entrar al feed
     loadPosts();
 }
 
@@ -806,16 +786,6 @@ function showProfile() {
     document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById("navProfile").classList.add("active");
     loadUserProfile();
-}
-
-function showStats() {
-    document.getElementById("feedSection").style.display = "none";
-    document.getElementById("profileSection").style.display = "none";
-    document.getElementById("statsSection").style.display = "block";
-    document.getElementById("settingsSection").style.display = "none";
-    
-    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
-    document.getElementById("navStats").classList.add("active");
 }
 
 function showSettings() {
@@ -831,30 +801,12 @@ function showSettings() {
 function toggleTheme() {
     document.body.classList.toggle("dark-theme");
     const icon = document.getElementById("themeToggle").querySelector('i');
-    if (document.body.classList.contains("dark-theme")) {
-        icon.className = "fas fa-sun";
-    } else {
-        icon.className = "fas fa-moon";
-    }
+    icon.className = document.body.classList.contains("dark-theme") ? "fas fa-sun" : "fas fa-moon";
 }
 
 // ===== INICIALIZACIÓN =====
 async function init() {
     await loadFromCloud();
-    
-    // Crear admin si no existe
-    if (!users.find(u => u.username === "ADMIN")) {
-        users.push({
-            id: Date.now() + "",
-            username: "ADMIN",
-            password: "breo12345",
-            email: "admin@socialrd.com",
-            avatar: "https://ui-avatars.com/api/?name=ADMIN&background=ff4757&color=fff",
-            role: "admin"
-        });
-        await saveToCloud();
-    }
-    
     document.getElementById("login").style.display = "block";
 }
 
@@ -887,11 +839,9 @@ async function register() {
         role: "user"
     });
     
-    const saved = await saveToCloud();
-    if (saved) {
-        showNotification("✅ Registro exitoso!");
-        showLogin();
-    }
+    await saveToCloud();
+    showNotification("✅ Registro exitoso!");
+    showLogin();
 }
 
 // ===== LOGIN =====
@@ -981,68 +931,87 @@ async function upload() {
             teacherRating: newPostRating
         });
         
-        const saved = await saveToCloud();
-        if (saved) {
-            showNotification("✅ ¡Publicado!");
-            
-            // Limpiar formulario
-            document.getElementById("desc").value = "";
-            document.getElementById("image").value = "";
-            document.getElementById("teacherSelect").value = "";
-            newPostRating = 0;
-            document.querySelectorAll("#newPostStars .star").forEach(s => s.classList.remove("active"));
-            
-            // Recargar posts inmediatamente
-            await loadPosts();
-        }
+        await saveToCloud();
+        showNotification("✅ ¡Publicado!");
+        
+        // Limpiar formulario
+        document.getElementById("desc").value = "";
+        document.getElementById("image").value = "";
+        document.getElementById("teacherSelect").value = "";
+        newPostRating = 0;
+        document.querySelectorAll("#newPostStars .star").forEach(s => s.classList.remove("active"));
+        
+        await loadPosts();
     };
     reader.readAsDataURL(imageFile);
 }
 
-// ===== CARGAR POSTS =====
+// ===== CARGAR POSTS (VERSIÓN FINAL CORREGIDA) =====
 async function loadPosts() {
     await loadFromCloud();
     
-    let html = "";
-    
     if (posts.length === 0) {
-        document.getElementById("posts").innerHTML = "<p style='text-align:center; padding:40px;'>No hay calificaciones aún. ¡Sé el primero!</p>";
+        document.getElementById("posts").innerHTML = "<p style='text-align:center; padding:40px;'>No hay calificaciones aún</p>";
         return;
     }
     
+    // Ordenar por fecha (más reciente primero)
     posts.sort((a, b) => new Date(b.date) - new Date(a.date));
     
+    let html = "";
     posts.forEach(post => {
         const user = users.find(u => u.username === post.user) || {};
         html += `
-            <div class="post">
-                <div style="display:flex; align-items:center; gap:10px; margin-bottom:15px;">
-                    <img src="${user.avatar || 'https://ui-avatars.com/api/?name=' + post.user}" class="user-avatar">
+            <div class="post" style="margin-bottom:25px; padding:25px; border-radius:20px; background:${document.body.classList.contains('dark-theme') ? '#2d3748' : 'white'}; box-shadow:0 5px 20px rgba(0,0,0,0.1);">
+                <!-- Cabecera del post -->
+                <div style="display:flex; align-items:center; gap:15px; margin-bottom:15px;">
+                    <img src="${user.avatar || 'https://ui-avatars.com/api/?name=' + post.user}" style="width:60px; height:60px; border-radius:50%; object-fit:cover; border:3px solid #4169E1;">
                     <div>
-                        <strong>${post.user}</strong>
-                        ${post.user === 'ADMIN' ? '<span class="admin-badge">Admin</span>' : ''}
-                        <br><small>${new Date(post.date).toLocaleString()}</small>
+                        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                            <span style="font-weight:600; font-size:18px;">${post.user}</span>
+                            ${post.user === 'ADMIN' ? '<span style="background:#ff4757; color:white; padding:4px 12px; border-radius:20px; font-size:12px; font-weight:500;">Admin</span>' : ''}
+                        </div>
+                        <div style="font-size:13px; opacity:0.7; margin-top:5px;">
+                            <i class="far fa-clock"></i> ${new Date(post.date).toLocaleString()}
+                        </div>
                     </div>
                 </div>
-                <div style="margin:10px 0; padding:10px; background:#4169E1; color:white; border-radius:5px;">
-                    <i class="fas fa-chalkboard-teacher"></i> ${post.teacher} ⭐ ${post.teacherRating}/5
+                
+                <!-- Profesor y calificación -->
+                <div style="margin:15px 0; padding:10px 20px; background:#4169E1; color:white; border-radius:30px; display:inline-block; font-weight:500;">
+                    <i class="fas fa-chalkboard-teacher"></i> ${post.teacher} 
+                    <span style="margin-left:10px; background:white; color:#4169E1; padding:3px 10px; border-radius:20px;">
+                        ⭐ ${post.teacherRating}/5
+                    </span>
                 </div>
-                <img src="${post.image}" style="width:100%; border-radius:10px; margin:10px 0;">
-                <p style="margin:10px 0;">${post.description}</p>
+                
+                <!-- Imagen -->
+                <div style="margin:20px 0; border-radius:15px; overflow:hidden; box-shadow:0 3px 10px rgba(0,0,0,0.1);">
+                    <img src="${post.image}" style="width:100%; max-height:450px; object-fit:cover; cursor:pointer; transition:transform 0.3s;" onclick="window.open(this.src)" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                </div>
+                
+                <!-- Descripción -->
+                <p style="margin:20px 0; font-size:16px; line-height:1.7; padding:0 5px;">${post.description}</p>
+                
+                <!-- Botón de admin (si corresponde) -->
                 ${isAdmin && post.user !== 'ADMIN' ? `
-                    <button class="btn-danger" onclick="blockUser('${post.user}')">
-                        <i class="fas fa-ban"></i> Bloquear Usuario
-                    </button>
+                    <div style="margin-top:20px; border-top:1px solid rgba(128,128,128,0.2); padding-top:20px;">
+                        <button onclick="blockUser('${post.user}')" style="padding:10px 20px; background:#ff4757; color:white; border:none; border-radius:10px; cursor:pointer; font-weight:500;">
+                            <i class="fas fa-ban"></i> Bloquear Usuario
+                        </button>
+                    </div>
                 ` : ''}
             </div>
         `;
     });
     
     document.getElementById("posts").innerHTML = html;
+    console.log(`✅ Mostrados ${posts.length} posts en el feed`);
 }
 
 // ===== PERFIL =====
 async function loadUserProfile() {
+    await loadFromCloud();
     const user = users.find(u => u.username === currentUser);
     if (!user) return;
     
@@ -1051,25 +1020,32 @@ async function loadUserProfile() {
     document.getElementById("profileName").innerText = user.username;
     document.getElementById("profileEmail").innerText = user.email;
     document.getElementById("profileAvatar").src = user.avatar;
+    document.getElementById("profileMiniAvatar").src = user.avatar;
     document.getElementById("profilePostsCount").innerText = userPosts.length;
+    
+    // Calcular promedio
+    let totalRating = 0;
+    userPosts.forEach(p => totalRating += p.teacherRating || 0);
+    const avg = userPosts.length > 0 ? (totalRating / userPosts.length).toFixed(1) : 0;
+    document.getElementById("profileRatingAvg").innerText = avg;
     
     let userPostsHtml = "";
     userPosts.sort((a, b) => new Date(b.date) - new Date(a.date));
     
     userPosts.forEach(post => {
         userPostsHtml += `
-            <div class="post" style="margin-bottom:15px;">
-                <div style="background:#4169E1; color:white; padding:5px 10px; border-radius:5px; margin-bottom:10px;">
+            <div style="margin-bottom:20px; padding:20px; border-radius:15px; background:${document.body.classList.contains('dark-theme') ? '#2d3748' : 'white'};">
+                <div style="background:#4169E1; color:white; padding:5px 15px; border-radius:20px; display:inline-block; margin-bottom:15px;">
                     ${post.teacher} ⭐ ${post.teacherRating}/5
                 </div>
-                <img src="${post.image}" style="width:100%; border-radius:10px;">
-                <p style="margin-top:10px;">${post.description}</p>
-                <small>${new Date(post.date).toLocaleString()}</small>
+                <img src="${post.image}" style="width:100%; border-radius:10px; margin:10px 0;">
+                <p>${post.description}</p>
+                <small style="opacity:0.7;">${new Date(post.date).toLocaleString()}</small>
             </div>
         `;
     });
     
-    document.getElementById("userPosts").innerHTML = userPostsHtml || "<p>No has calificado profesores aún</p>";
+    document.getElementById("userPosts").innerHTML = userPostsHtml || "<p style='text-align:center; padding:30px;'>No has calificado profesores aún</p>";
 }
 
 // ===== ADMIN =====
@@ -1078,33 +1054,30 @@ function loadAdminPanel() {
     document.getElementById("totalPosts").innerText = posts.length;
     
     let totalComments = 0;
-    Object.keys(comments).forEach(key => {
-        totalComments += comments[key].length;
-    });
+    Object.keys(comments).forEach(key => totalComments += comments[key].length);
     document.getElementById("totalComments").innerText = totalComments;
     
     const blockedDiv = document.getElementById("blockedUsers");
     if (blockedUsers.length === 0) {
-        blockedDiv.innerHTML = "<p>No hay usuarios bloqueados</p>";
+        blockedDiv.innerHTML = "<p style='opacity:0.7;'>No hay usuarios bloqueados</p>";
     } else {
         blockedDiv.innerHTML = blockedUsers.map(user => `
-            <div style="display:flex; justify-content:space-between; padding:10px; border-bottom:1px solid rgba(255,71,87,0.2);">
-                <span><i class="fas fa-ban" style="color:#ff4757;"></i> ${user}</span>
-                <button class="btn-primary" onclick="unblockUser('${user}')" style="padding:5px 10px;">Desbloquear</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border-bottom:1px solid rgba(255,71,87,0.2);">
+                <span><i class="fas fa-ban" style="color:#ff4757; margin-right:8px;"></i> ${user}</span>
+                <button onclick="unblockUser('${user}')" style="padding:6px 15px; background:#4169E1; color:white; border:none; border-radius:8px; cursor:pointer; font-size:13px;">
+                    <i class="fas fa-check"></i> Desbloquear
+                </button>
             </div>
         `).join('');
     }
 }
 
 async function blockUser(username) {
-    if (!confirm(`¿Bloquear a ${username}?`)) return;
+    if (!confirm(`¿Estás seguro de bloquear a ${username}?`)) return;
     
     if (!blockedUsers.includes(username)) {
         blockedUsers.push(username);
-        
-        // Eliminar sus posts
         posts = posts.filter(p => p.user !== username);
-        
         await saveToCloud();
         showNotification(`✅ Usuario ${username} bloqueado`);
         await loadPosts();
@@ -1124,4 +1097,5 @@ init();
 </script>
 </body>
 </html>
+
 
