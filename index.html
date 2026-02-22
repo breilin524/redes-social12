@@ -692,24 +692,30 @@ let comments = {};
 let blockedUsers = [];
 let newPostRating = 0;
 
-// ===== FUNCIONES JSONBIN =====
+// ===== FUNCIONES JSONBIN MEJORADAS =====
 async function loadFromCloud() {
     try {
-        const response = await fetch(`${API_URL}/latest`, {
-            headers: { 'X-Master-Key': JSONBIN_CONFIG.API_KEY }
+        // Agregamos un parámetro aleatorio para evitar caché
+        const response = await fetch(`${API_URL}/latest?${Date.now()}`, {
+            headers: { 
+                'X-Master-Key': JSONBIN_CONFIG.API_KEY,
+                'X-Bin-Meta': 'false' // Evita metadata
+            }
         });
         
-        if (!response.ok) throw new Error('Error');
+        if (!response.ok) throw new Error('Error cargando');
         
         const data = await response.json();
-        const record = data.record;
         
-        users = record.users || [];
-        posts = record.posts || [];
-        comments = record.comments || {};
-        blockedUsers = record.blockedUsers || [];
+        // Asegurarnos que los datos son un objeto
+        if (data && typeof data === 'object') {
+            users = data.users || [];
+            posts = data.posts || [];
+            comments = data.comments || {};
+            blockedUsers = data.blockedUsers || [];
+        }
         
-        console.log('✅ Datos cargados');
+        console.log('✅ Datos cargados:', { users: users.length, posts: posts.length });
         return true;
     } catch (error) {
         console.error('Error cargando:', error);
@@ -719,23 +725,40 @@ async function loadFromCloud() {
 
 async function saveToCloud() {
     try {
+        const dataToSave = {
+            users: users || [],
+            posts: posts || [],
+            comments: comments || {},
+            blockedUsers: blockedUsers || [],
+            lastUpdate: new Date().toISOString()
+        };
+        
         const response = await fetch(API_URL, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Master-Key': JSONBIN_CONFIG.API_KEY
+                'X-Master-Key': JSONBIN_CONFIG.API_KEY,
+                'X-Bin-Meta': 'false'
             },
-            body: JSON.stringify({
-                users, posts, comments, blockedUsers,
-                lastUpdate: new Date().toISOString()
-            })
+            body: JSON.stringify(dataToSave)
         });
         
-        if (!response.ok) throw new Error('Error');
-        console.log('✅ Datos guardados');
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Error ${response.status}: ${errorText}`);
+        }
+        
+        console.log('✅ Datos guardados exitosamente');
+        
+        // Forzar recarga inmediata
+        setTimeout(async () => {
+            await loadFromCloud();
+        }, 500);
+        
         return true;
     } catch (error) {
         console.error('Error guardando:', error);
+        showNotification("Error al guardar: " + error.message, "error");
         return false;
     }
 }
@@ -769,6 +792,9 @@ function showFeed() {
     
     document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById("navFeed").classList.add("active");
+    
+    // Recargar posts al entrar al feed
+    loadPosts();
 }
 
 function showProfile() {
@@ -861,9 +887,11 @@ async function register() {
         role: "user"
     });
     
-    await saveToCloud();
-    showNotification("✅ Registro exitoso!");
-    showLogin();
+    const saved = await saveToCloud();
+    if (saved) {
+        showNotification("✅ Registro exitoso!");
+        showLogin();
+    }
 }
 
 // ===== LOGIN =====
@@ -953,16 +981,20 @@ async function upload() {
             teacherRating: newPostRating
         });
         
-        await saveToCloud();
-        showNotification("✅ ¡Publicado!");
-        await loadPosts();
-        
-        // Limpiar formulario
-        document.getElementById("desc").value = "";
-        document.getElementById("image").value = "";
-        document.getElementById("teacherSelect").value = "";
-        newPostRating = 0;
-        document.querySelectorAll("#newPostStars .star").forEach(s => s.classList.remove("active"));
+        const saved = await saveToCloud();
+        if (saved) {
+            showNotification("✅ ¡Publicado!");
+            
+            // Limpiar formulario
+            document.getElementById("desc").value = "";
+            document.getElementById("image").value = "";
+            document.getElementById("teacherSelect").value = "";
+            newPostRating = 0;
+            document.querySelectorAll("#newPostStars .star").forEach(s => s.classList.remove("active"));
+            
+            // Recargar posts inmediatamente
+            await loadPosts();
+        }
     };
     reader.readAsDataURL(imageFile);
 }
@@ -972,12 +1004,20 @@ async function loadPosts() {
     await loadFromCloud();
     
     let html = "";
+    
+    if (posts.length === 0) {
+        document.getElementById("posts").innerHTML = "<p style='text-align:center; padding:40px;'>No hay calificaciones aún. ¡Sé el primero!</p>";
+        return;
+    }
+    
+    posts.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
     posts.forEach(post => {
         const user = users.find(u => u.username === post.user) || {};
         html += `
             <div class="post">
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:15px;">
-                    <img src="${user.avatar || ''}" class="user-avatar">
+                    <img src="${user.avatar || 'https://ui-avatars.com/api/?name=' + post.user}" class="user-avatar">
                     <div>
                         <strong>${post.user}</strong>
                         ${post.user === 'ADMIN' ? '<span class="admin-badge">Admin</span>' : ''}
@@ -998,7 +1038,7 @@ async function loadPosts() {
         `;
     });
     
-    document.getElementById("posts").innerHTML = html || "<p style='text-align:center; padding:40px;'>No hay calificaciones aún. ¡Sé el primero!</p>";
+    document.getElementById("posts").innerHTML = html;
 }
 
 // ===== PERFIL =====
@@ -1011,10 +1051,11 @@ async function loadUserProfile() {
     document.getElementById("profileName").innerText = user.username;
     document.getElementById("profileEmail").innerText = user.email;
     document.getElementById("profileAvatar").src = user.avatar;
-    document.getElementById("profileMiniAvatar").src = user.avatar;
     document.getElementById("profilePostsCount").innerText = userPosts.length;
     
     let userPostsHtml = "";
+    userPosts.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
     userPosts.forEach(post => {
         userPostsHtml += `
             <div class="post" style="margin-bottom:15px;">
@@ -1083,3 +1124,4 @@ init();
 </script>
 </body>
 </html>
+
